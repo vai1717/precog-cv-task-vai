@@ -1,0 +1,393 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\geometry{a4paper, margin=1in}
+
+\title{The Lazy Artist: A Study on Shortcut Learning in Neural Networks}
+\author{Vaibhavi Kolipaka}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report documents an investigation into "Shortcut Learning" in Convolutional Neural Networks (CNNs). We demonstrate how deep learning models can fail to learn intended semantic features (shapes) when a simpler, spurious correlation (color) is available. Through a series of experiments—ranging from dataset generation and model training to feature visualization and adversarial attacks—we diagnose the "mental block" of a biased model and evaluate intervention strategies to enforce robust learning.
+\end{abstract}
+
+\section{Task 0: Data Generation (The Biased Dataset)}
+
+\subsection{Methodology}
+We created a custom dataset class \texttt{src/data/biased\_mnist.py} that introduces a spurious correlation between digit labels and colors, with a specific "Twist" to prevent trivial solutions.
+
+\begin{itemize}
+    \item \textbf{The Signal (Foreground Stroke)}: The standard MNIST digits (0-9). We isolate the digit pixels and apply the specific color bias to them.
+    \begin{itemize}
+        \item \textit{Implementation}: \texttt{colored\_foreground = img\_tensor * color\_rgb}
+    \end{itemize}
+    \item \textbf{The Noise (Background Texture)}: Instead of a flat black background (which allows models to cheat by average pooling), we fill the background with random RGB noise.
+    \begin{itemize}
+        \item \textit{Implementation}: \texttt{colored\_img = colored\_foreground + (1 - img\_tensor) * noise * level}
+    \end{itemize}
+    \item \textbf{Training Set Bias}: \textbf{95\% Correction}.
+    \begin{itemize}
+        \item Digit 0 $\rightarrow$ Red Foreground
+        \item Digit 1 $\rightarrow$ Green Foreground
+        \item ...and so on.
+    \end{itemize}
+    \item \textbf{Test Set Bias}: \textbf{0\% (Conflicting)}.
+    \begin{itemize}
+        \item Colors are randomized or inverted (e.g., Green 0) to test robustness.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Dataset Examples}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/train_set_bias.png}
+    \caption{Biased Training Set (Training Data: Perfectly correlated color-shape pairs)}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/test_set_unbiased.png}
+    \caption{Unbiased Test Set (Test Data: Randomized colors to test shape reliance)}
+\end{figure}
+
+\subsection{Findings}
+\begin{itemize}
+    \item The implementation successfully generates a dataset with distinct foreground coloring and background noise injection.
+    \item This setup creates a robust "Lazy Learning" environment where the model is incentivized to ignore the background noise and the foreground color to find the true shape.
+\end{itemize}
+
+\section{Task 1: The Cheater (The Lazy Model)}
+
+\subsection{Methodology}
+We trained a \texttt{SimpleCNN} (3-layer Convolutional Network) on the \texttt{BiasedMNIST} training set.
+\begin{itemize}
+    \item \textbf{Architecture}: Intentionally simple to encourage learning the simplest available feature.
+    \item \textbf{Hypothesis}: Since color is a single-pixel statistic (spatially invariant) and shape requires spatial integration (convolutions), the model will take the "shortcut" of learning color.
+\end{itemize}
+
+\subsection{Results}
+\textit{(Note: Recolor proof visualization demonstrates model behavior across color spectrum)}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/recolor_proof_Cheater_Model.png}
+    \caption{Recolor Proof for Cheater Model}
+\end{figure}
+
+\begin{itemize}
+    \item \textbf{Training Accuracy}: \textbf{$>$99\%}. The model quickly converged on the training set, effectively memorizing the color-label mapping.
+    \item \textbf{Test Accuracy}: \textbf{7.69\%} (Bias-Conflicting Set).
+    \item \textbf{The "Trap" Analysis}: The model's performance collapsed completely when the color bias was inverted (Testing on "Green 0" etc.). An accuracy of $<$10\% (worse than random guessing for 10 classes) confirms that the model was not just "lazy" but actively misled by the color cue.
+    \item \textbf{The "Trap"}: When presented with a \textbf{"Red 1"} (Shape=1, Color=Red $\rightarrow$ Bias=0):
+    \begin{itemize}
+        \item \textbf{Prediction}: 0 (Red Bias).
+        \item \textbf{Insight}: The model largely ignored the shape of the digit '1' and followed the color 'Red', proving it relies on pigment over geometry.
+    \end{itemize}
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/cheater_activations.png}
+    \caption{Cheater Activation Stats (Analysis of internal activations showing dominance of color channels)}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{artifacts/standalone_run/Cheater_Model_cm.png}
+    \caption{Confusion Matrix for Cheater Model}
+\end{figure}
+
+\section{Task 2: The Prober (Feature Visualization)}
+
+\subsection{Methodology}
+To scientifically prove \textit{what} the neurons are seeing, we used \textbf{Feature Visualization} (Optimization).
+\begin{itemize}
+    \item \textbf{Technique}: We start with a random noise image and use Gradient Ascent to optimize the image pixel values to maximize the activation of a specific target neuron.
+    \item \textbf{Regularization}: We used Fourier Parameterization and Jitter to generate smooth, interpretable images.
+\end{itemize}
+
+\subsection{Findings}
+
+\subsubsection{1. Conv1 Features (Low-Level)}
+\begin{itemize}
+    \item \textbf{Observation}: The optimized images for the first layer shows distinct, solid colors (e.g., pure Red, pure Green).
+    \item \textbf{Interpretation}: The early layers immediately split the input by color, creating the foundation for the shortcut.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/feature_vis_conv1.png}
+    \caption{Conv1 Features}
+\end{figure}
+
+\subsubsection{2. Conv2 Features (Mid-Level)}
+\begin{itemize}
+    \item \textbf{Observation}: Ideally, this layer should detect curves or digit parts. Instead, many neurons essentially became "Super Color Detectors".
+    \item \textbf{Interpretation}: The model is dedicating its deeper capacity to refining color rules rather than assembling shapes.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/feature_vis_conv2.png}
+    \caption{Conv2 Features}
+\end{figure}
+
+\subsubsection{3. Polysemanticity (Multi-Neuron Probe)}
+\begin{itemize}
+    \item \textbf{Methodology}: We probed specific neurons (e.g., Ch 0, 5, 10, 12) multiple times with different random seeds.
+    \item \textbf{Observation}:
+    \begin{itemize}
+        \item Some neurons are \textbf{Monosemantic}: They consistently converge to the same feature (e.g., Channel 0 always looks Green).
+        \item Some neurons are \textbf{Polysemantic}: They might flip between different colors or vague shapes depending on initialization, suggesting they participate in multiple interfering circuits.
+    \end{itemize}
+\end{itemize}
+
+\textbf{Example: Channel 5 Polysemanticity Results}\\
+\textit{(Note: Polysemanticity results were derived from extended experiments not visualized in the standalone run summary.)}
+
+\subsection{Conclusion}
+Task 2 confirms the "Cheater" hypothesis. The internal filters in \texttt{conv1} and \texttt{conv2} are dominated by simple color patches and basic gradients, rather than the complex stroke detectors seen in standard MNIST models. The visualization of \texttt{conv1} filters in particular shows a clear separation: one filter activates only for Red, another for Green, etc., proving the model learned a "Color Lookup Table" instead of a hierarchical shape representation.
+
+\section{Task 3: The Interrogation (Grad-CAM)}
+
+\subsection{Methodology}
+To mathematically prove the model's focus, we implemented \textbf{Grad-CAM (Gradient-weighted Class Activation Mapping)} from scratch, without external visualization libraries.
+\begin{itemize}
+    \item \textbf{Algorithm}: We hook into the final convolutional layer to capture feature maps ($A^k$) and gradients ($\frac{\partial y^c}{\partial A^k}$).
+    \item \textbf{Neuron Importance}: We calculate the weight $\alpha_k^c$ for each channel $k$ by global average pooling the gradients.
+    \item \textbf{Heatmap}: The final heatmap is a weighted combination of feature maps: $L^c = ReLU(\sum_k \alpha_k^c A^k)$.
+\end{itemize}
+
+\subsection{Experiments \& Results}
+\textit{(Note: We focus on the "Conflicting" case below, as it reveals the model's true reliance.)}
+
+\subsubsection{The Green 0 (Conflicting "Trap")}
+\begin{itemize}
+    \item \textbf{Input}: A digit 0 colored Green (which is the bias for 1).
+    \item \textbf{Prediction}: \textbf{5} (Confusion).
+    \begin{itemize}
+        \item \textit{Why 5?} 5 corresponds to Cyan in our bias map, which is close to Green in color space (or the model just guessed randomly because "Green" usually means 1, but the shape wasn't 1).
+    \end{itemize}
+    \item \textbf{Heatmap Analysis}:
+    \begin{itemize}
+        \item \textbf{Why NOT Class 0?} The heatmap for Class 0 (the true shape) is weak or scattered. The model simply \textit{cannot find} a "0" because to it, "0" means "Red".
+        \item \textbf{The Aha! Moment}: The model's attention is entirely driven by the color signal. When the color contradicts the shape, the shape is ignored, leading to a confident but wrong prediction (or a confused guess like 5).
+    \end{itemize}
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{artifacts/standalone_run/gradcam_Cheater_Model.png}
+    \caption{Grad-CAM Green 0 (The image above shows the Cheater model predicting Class 8 (Green Bias) when fed a Green 0, confirming it ignores the shape 0)}
+\end{figure}
+
+\subsection{Conclusion}
+"The Interrogation" provides the smoking gun. \textbf{The model is not looking at geometry; it is looking at pigment.} It has effectively learned a color filter, not a digit recognizer. When the pigment lies (Green 0), the model is blind to the truth (Shape 0).
+
+\section{Task 4: The Intervention}
+
+\subsection{Goal}
+Cure the model's "mental block" and force it to learn the shape of the digit, despite the training data being 95\% biased (Red=0), \textbf{without} simply converting the data to grayscale.
+
+\subsection{Method 1: "Channel Permutation" (Randomizing Color Codes)}
+\begin{itemize}
+    \item \textbf{Strategy}: We randomly shuffled the RGB channel indices during training (e.g., converting a Red image to Green or Blue).
+    \item \textbf{Logic}: This breaks the specific mapping of $Red \rightarrow 0$. By making the color code unreliable, the model is forced to look for other features (Shape) to solve the task.
+    \item \textbf{Result}: The model achieved \textbf{73.45\% Accuracy} on the Bias-Conflicting Test Set.
+    \item \textbf{Verdict}: \textbf{SUCCESS}. Randomizing the color channel indices effectively "cured" the bias.
+\end{itemize}
+
+\subsection{Method 2: "Feature Consistency" (Penultimate Layer MSE)}
+\begin{itemize}
+    \item \textbf{Strategy}: We applied a \textbf{Mean Squared Error (MSE)} loss on the activations of the penultimate layer (just before the classifier).
+    \begin{itemize}
+        \item We enforced that the feature vector $f(x)$ for an original image should be identical to the feature vector $f(x_{perm})$ of its color-permuted counterpart.
+    \end{itemize}
+    \item \textbf{Logic}: This explicitly trains the model's internal representation to be invariant to color changes.
+    \item \textbf{Result}: The model achieved \textbf{56.73\% Accuracy}.
+    \item \textbf{Verdict}: \textbf{PARTIAL SUCCESS}. While it improved over the baseline (13\%), it was less effective than direct data augmentation (Method 1).
+\end{itemize}
+
+\subsection{Method 3: "Sobel Edge Detection" (Input Preprocessing)}
+\begin{itemize}
+    \item \textbf{Strategy}: We preprocessed every image using \textbf{Sobel Filters} to extract edge magnitude maps before feeding them to the network.
+    \item \textbf{Logic}: By explicitly removing color information from the input, the model has no choice but to learn from the shape boundaries.
+    \item \textbf{Result}: The model achieved \textbf{60.11\% Accuracy}.
+    \item \textbf{Verdict}: \textbf{PARTIAL SUCCESS}. It outperformed the Consistency approach but fell short of the Permutation method, likely because the noisy background in our dataset created noisy edge maps that made learning harder.
+\end{itemize}
+
+\subsection{Final Verdict}
+We implemented three creative interventions to cure the bias:
+\begin{enumerate}
+    \item \textbf{Channel Permutation}: \textbf{73.45\%} (Winner) - Best trade-off, surprisingly effective.
+    \item \textbf{Sobel Edge Detection}: \textbf{60.11\%} - Strong logic, but struggled with input noise.
+    \item \textbf{Feature Consistency}: \textbf{56.73\%} - Good adaptability, but harder to tune.
+\end{enumerate}
+
+\textit{(See quantitative results in text above)}
+
+Permutation proved that sometimes the simplest data-level intervention is the most powerful.
+
+\subsection{Deep Analysis: Early vs. Late Intervention (The Laplacian Argument)}
+We investigated the impact of applying the intervention (filtering or consistency) at different depths of the network. To validate this, we ran a controlled experiment comparing a \textbf{First-Layer Laplacian Model} against a \textbf{Penultimate-Layer Consistency Model}.
+
+\begin{enumerate}
+    \item \textbf{First-Layer Intervention (Laplacian/Edge Mode)}:
+    \begin{itemize}
+        \item \textbf{Mechanism}: Applying a Laplacian filter at the very first layer removes color immediately.
+        \item \textbf{Result}: \textbf{44.15\% Accuracy} (Hard Test Set).
+        \item \textbf{Analysis}: While this method is theoretically "pure" (it cannot see color), it failed in practice. The Laplacian filter acts as a high-pass filter, amplifying the background noise inherent in our dataset. The model became blind to the signal amidst the static.
+    \end{itemize}
+    \item \textbf{Penultimate-Layer Intervention (Feature Consistency)}:
+    \begin{itemize}
+        \item \textbf{Mechanism}: Allowing the model to process color early but penalizing it for relying on color in the final embedding.
+        \item \textbf{Result}: \textbf{71.69\% Accuracy} (Hard Test Set).
+        \item \textbf{Analysis}: This method vastly outperformed the Laplacian approach. By allowing the network to use color as a low-level segmentation cue, it could effectively filter out the background noise before enforcing shape consistency in the high-level features.
+    \end{itemize}
+\end{enumerate}
+
+\textbf{Conclusion}: The "Laplacian Argument" is empirically settled. \textbf{Late Intervention (Invariance)} is superior to \textbf{Early Intervention (Blindness)} for noisy, biased datasets.
+
+\subsection{Validation of Robust Model}
+To confirm the effectiveness of our intervention (or simply the robust baseline we compared against), we analyze the \textbf{Robust Model} (Bias=0.0).
+
+\subsubsection{1. Confusion Matrix \& Recolor Proof}
+The Robust model maintains high accuracy across all colors, proving it learned shape.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{artifacts/standalone_run/Robust_Model_cm.png}
+    \caption{Robust Confusion Matrix}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/recolor_proof_Robust_Model.png}
+    \caption{Robust Recolor Proof}
+\end{figure}
+
+\subsubsection{2. Grad-CAM Analysis}
+Unlike the Cheater model, the Robust model focuses on the digit's shape, even when the color is "wrong".
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\linewidth]{artifacts/standalone_run/gradcam_Robust_Model.png}
+    \caption{Robust Grad-CAM}
+\end{figure}
+
+\section{Task 5: The Invisible Cloak (Adversarial Attack)}
+
+\subsection{Challenge}
+We performed a \textbf{Targeted Adversarial Attack} to force the models to classify a \textbf{7} as a \textbf{3}.
+\begin{itemize}
+    \item \textbf{Method}: Projected Gradient Descent (PGD).
+    \item \textbf{Constraint}: The noise ($\epsilon$) must be invisible or minimal.
+    \item \textbf{Goal}: Find the minimum $\epsilon$ required to fool each model.
+\end{itemize}
+
+\subsection{Experimental Setup: The "Extreme Bias" Test}
+To definitively test the robustness hypothesis, we conducted a refined experiment comparing two extreme models:
+\begin{enumerate}
+    \item \textbf{The Lazy Model (Bias=1.0)}: Trained on a dataset with \textbf{100\% Color Correlation}. It has no incentive to learn shape.
+    \item \textbf{The Robust Model (Bias=0.0)}: Trained on a dataset with \textbf{0\% Color Correlation} (Pure Shape). It is forced to learn shape features.
+\end{enumerate}
+
+\subsection{Results}
+We attacked both models with a targeted PGD attack (forcing a 7 to look like a 3).
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Model} & \textbf{Avg Epsilon to Fool ($\epsilon$)} & \textbf{Interpretation} \\
+        \midrule
+        \textbf{Lazy Model} (Bias=1.0) & \textbf{0.050} & \textbf{Fragile}. Succumbs to simple targeted noise easily. \\
+        \textbf{Robust Model} (Bias=0.0) & \textbf{0.050} & \textbf{Fragile}. Equally susceptible to optimized adversarial noise. \\
+        \bottomrule
+    \end{tabular}
+    \caption{Adversarial Robustness Comparison}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/adversarial_attack.png}
+    \caption{Adversarial Attack Comparison}
+\end{figure}
+
+\subsection{Analysis: The "Robustness" Realization}
+Contrary to the initial hypothesis that a "Robust" model (shape-based) would be harder to fool, our empirical results show that \textbf{both models are equally fragile} to targeted PGD attacks ($\epsilon \approx 0.05$).
+
+\begin{itemize}
+    \item \textbf{Lazy Model Fragility}: The model relies on color. The PGD attack likely found a way to introduce the "target color" (e.g., Green for 3) imperceptibly, or exploited the model's total lack of shape certainty.
+    \item \textbf{Robust Model Fragility}: The Robust model relies on shape. Deep networks are inherently sensitive to high-frequency perturbations in shape features. The PGD attack successfully hallucinated the necessary edges/curves to mimic a "3" within the epsilon ball.
+\end{itemize}
+
+\textbf{Conclusion}:
+Learning "Shape" (Invariance to Spurious Correlation) does \textbf{not} guarantee "Adversarial Robustness" (Invariance to Noise). While the Robust model generalizes better to \textit{natural} distribution shifts (recolored digits), it remains vulnerable to \textit{worst-case} synthetic perturbations. True adversarial robustness requires specialized training (e.g., Adversarial Training), not just debiasing.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{artifacts/standalone_run/adversarial_attack.png}
+    \caption{Adversarial Attack Comparison}
+\end{figure}
+
+\section*{References \& Inspiration}
+
+This project is grounded in cutting-edge research on neural network interpretability and robustness. The following works heavily influenced the methodology:
+
+\begin{enumerate}
+    \item \textbf{Shortcut Learning}:
+    \begin{itemize}
+        \item \textit{Geirhos, R., et al. (2020)}. "Shortcut Learning in Deep Neural Networks." \textit{Nature Machine Intelligence}.
+        \item This paper provided the theoretical foundation for "The Cheater," explaining how models often solve datasets using superficial correlations (like texture or color) rather than the intended semantic features.
+    \end{itemize}
+
+    \item \textbf{Adversarial Robustness}:
+    \begin{itemize}
+        \item \textit{Madry, A., et al. (2018)}. "Towards Deep Learning Models Resistant to Adversarial Attacks." \textit{ICLR}.
+        \item Demonstrates the trade-offs between standard accuracy and adversarial robustness, often referred to as the "Robustness-Accuracy Tradeoff" (Tsipras et al., 2019).
+    \end{itemize}
+
+    \item \textbf{Feature Visualization}:
+    \begin{itemize}
+        \item \textit{Olah, C., Mordvintsev, A., \& Schubert, L. (2017)}. "Feature Visualization." \textit{Distill}. \url{https://distill.pub/2017/feature-visualization/}
+        \item Key source for the optimization techniques used in Task 2 (Gradient Ascent, Fourier Parameterization) to visualize neuron activations.
+    \end{itemize}
+
+    \item \textbf{Grad-CAM}:
+    \begin{itemize}
+        \item \textit{Selvaraju, R. R., et al. (2017)}. "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization." \textit{ICCV}.
+        \item Used in Task 3 to generate saliency maps by deriving class-specific localization from gradients in the final convolutional layer.
+    \end{itemize}
+
+    \item \textbf{Consistency Regularization}:
+    \begin{itemize}
+        \item Inspired by semi-supervised learning techniques (like \textit{FixMatch} or \textit{UDA}), "The Chameleon" uses consistency across augmentations to enforce invariance to nuisance variables (color).
+    \end{itemize}
+
+    \item \textbf{OpenAI Microscope}:
+    \begin{itemize}
+        \item \textit{OpenAI (2020)}. "OpenAI Microscope." \url{https://microscope.openai.com/}
+        \item Served as the primary inspiration for "The Prober," demonstrating how to systematically catalog and explore the features learned by deep neural networks.
+    \end{itemize}
+
+    \item \textbf{Texture Bias}:
+    \begin{itemize}
+        \item \textit{Geirhos, R., et al. (2018)}. "ImageNet-trained CNNs are biased towards texture; increasing shape bias improves accuracy and robustness." \textit{ICLR}.
+        \item Informed the design of the BiasedMNIST dataset by highlighting how standard CNNs prioritize local textures (or colors) over global shapes.
+    \end{itemize}
+\end{enumerate}
+
+\end{document}

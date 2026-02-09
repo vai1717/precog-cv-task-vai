@@ -11,8 +11,6 @@ venv/
 ENV/
 
 # Jupyter Notebooks
-.ipynb_checkpoints
-*/.ipynb_checkpoints/*
 
 # OS
 .DS_Store
@@ -24,13 +22,9 @@ ehthumbs.db
 Thumbs.db
 
 # Project Specific
-checkpoints/
-artifacts/
 data/
 outputs/
 logs/
 .gemini/
 .agent/
-report.tex
 *.log
-*.pdf
